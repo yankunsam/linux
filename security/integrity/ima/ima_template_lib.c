@@ -327,3 +327,76 @@ int ima_eventsig_init(struct ima_event_data *event_data,
 out:
 	return rc;
 }
+
+static struct task_struct *task_from_tgid(pid_t tgid)
+{
+	struct task_struct *p;
+	for_each_process(p) {
+		if (p->pid == tgid)
+			return p;
+	}
+
+	return NULL;
+}
+
+
+#include <linux/mnt_namespace.h>
+extern const char *get_mnt_ns_alias(unsigned int, u64);
+extern int check_and_fix_ns_alias(unsigned int, u64);
+
+#define TMPBUFLEN 2048 // TODO: use PAGE_SIZE (see ima_fs)?
+int ima_namespaceid_init(struct ima_event_data *event_data,
+			 struct ima_field_data *field_data)
+{
+	char *tmpbuf;
+	enum data_formats fmt = DATA_FMT_STRING;
+	struct task_struct *c;
+	unsigned int mnt_ns_id;
+	u64 incarnation;
+	const char *alias_name = 0;
+	int result;
+
+	tmpbuf = kmalloc(TMPBUFLEN, GFP_KERNEL);
+	if (!tmpbuf) {
+		result = -ENOMEM;
+		goto out;
+	}
+
+	mnt_ns_id = get_mnt_ns_inum(current->nsproxy->mnt_ns);
+	incarnation = get_mnt_ns_seq(current->nsproxy->mnt_ns);
+	if (check_and_fix_ns_alias(mnt_ns_id, incarnation) == 0)
+		alias_name = get_mnt_ns_alias(mnt_ns_id, incarnation);
+	if (!alias_name) {
+		// walk through current process parent list and find the first one with
+		// different namespace for the cases a process forked a new process
+		// with new namespace
+		for(c = task_from_tgid(current->tgid);
+		  c && c->pid > 1 && current->nsproxy->mnt_ns == c->nsproxy->mnt_ns;)
+		{
+			c = c->parent;
+			c = task_from_tgid(c->tgid);
+		}
+
+		if (c)
+			snprintf(tmpbuf, TMPBUFLEN,"[pid=%d nsppid=%d ns=%u]", task_pid_nr(current),
+				    task_pid_nr(c), mnt_ns_id);
+		else
+			snprintf(tmpbuf, TMPBUFLEN,"[pid=%d nsppid=1 ns=%u]", task_pid_nr(current),
+							    mnt_ns_id);
+	} else {
+		snprintf(tmpbuf, TMPBUFLEN,"|%s|", alias_name);
+	}
+
+	result = ima_write_template_field_data(tmpbuf, strlen(tmpbuf), fmt, field_data);
+	kfree(tmpbuf);
+
+out:
+	return result;
+}
+
+void ima_show_namespaceid(struct seq_file *m, enum ima_show_type show,
+			struct ima_field_data *field_data)
+{
+	ima_show_template_field_data(m, show, DATA_FMT_STRING, field_data);
+}
+

@@ -102,6 +102,11 @@ struct ima_queue_entry {
 };
 extern struct list_head ima_measurements;	/* list of all measurements */
 
+struct alias_map {
+	u64 incarnation;
+	char *alias_name;
+};
+
 /* Internal IMA function definitions */
 int ima_init(void);
 int ima_fs_init(void);
@@ -282,5 +287,7 @@ static inline int security_filter_rule_match(u32 secid, u32 field, u32 op,
 #else
 #define	POLICY_FILE_FLAGS	S_IWUSR
 #endif /* CONFIG_IMA_WRITE_POLICY */
+
+#define NAMESPACE_FILE_FLAGS S_IWUSR
 
 #endif /* __LINUX_IMA_H */

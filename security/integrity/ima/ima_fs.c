@@ -23,10 +23,14 @@
 #include <linux/rcupdate.h>
 #include <linux/parser.h>
 #include <linux/vmalloc.h>
+#include <linux/mnt_namespace.h>
+#include <linux/radix-tree.h>
 
 #include "ima.h"
 
 static DEFINE_MUTEX(ima_write_mutex);
+
+static RADIX_TREE(ns_alias_mapping, GFP_ATOMIC);
 
 static int valid_policy = 1;
 #define TMPBUFLEN 12
@@ -346,12 +350,266 @@ out:
 	return result;
 }
 
+static void free_alias_map_entry(struct alias_map *map)
+{
+//	if (!map) {
+//		pr_err("IMA: not expected alias map entry as NULL\n");
+//		return;
+//	}
+//	if (!map->alias_name) {
+//		pr_err("IMA: not expected alias 'name' map entry as NULL\n");
+//		return;
+//	}
+	kfree(map->alias_name);
+	kfree(map);
+}
+
+static int allocate_alias_map_entry(struct alias_map **map, u64 seq,
+		char *alias_name, ssize_t namelen)
+{
+	struct alias_map *new_map;
+	int result;
+
+	new_map = kmalloc(sizeof(struct alias_map), GFP_KERNEL);
+	if (!new_map) {
+		result = ENOMEM;
+		goto out;
+	}
+
+	new_map->alias_name = kmalloc(namelen, GFP_KERNEL);
+	if (!new_map->alias_name) {
+		result = ENOMEM;
+		kfree(new_map);
+		goto out;
+	}
+
+	new_map->incarnation = seq;
+	strcpy(new_map->alias_name, alias_name);
+
+	*map = new_map;
+	result = 0;
+
+out:
+	return result;
+}
+
+/*
+ * if ns_id already exists, check incarnation. If incarnation is incorrect this is an outdated alias.
+ * return the alias name if the the alias map exists with the current incarnation number
+ *
+ */
+const char *get_mnt_ns_alias(unsigned int ns_id, u64 seq)
+{
+	struct alias_map *map;
+	char *alias_name = NULL;
+
+	map = radix_tree_lookup(&ns_alias_mapping, ns_id);
+	if (map) {
+		if (map->incarnation == seq) {
+			alias_name = map->alias_name;
+		}
+	}
+
+	return alias_name;
+}
+
+/*
+ * if there is a namespace alias for mnt_ns_id with incorrect incarnation, delete the alias
+ * return zero if the alias was already set with the correct ns_id and incarnation number
+ */
+int check_and_fix_ns_alias(unsigned int ns_id, u64 seq)
+{
+	int result;
+	struct alias_map *map;
+
+	result = 1;
+	map = radix_tree_lookup(&ns_alias_mapping, ns_id);
+	if (map) {
+		if (map->incarnation == seq) {
+//			pr_info("IMA: alias mapping found for nsid=%u seq=%llu alias='%s'\n", ns_id, seq, map->alias_name);
+			result = 0;
+		} else {
+			pr_err("IMA: alias mapping found with incorrect seq: nsid=%u seq=%llu expected seq=%llu\n", ns_id, map->incarnation, seq);
+			map = radix_tree_delete(&ns_alias_mapping, ns_id);
+			free_alias_map_entry(map);
+		}
+	}
+
+	return result;
+}
+
+static bool is_ns_alias_already_set(unsigned int ns_id, u64 seq)
+{
+	bool result = false;
+
+	if (get_mnt_ns_alias(ns_id, seq)) {
+		result = true;
+	}
+
+	return result;
+}
+
+static int check_ns_exists(unsigned int ns_id, u64 *seq)
+{
+	struct task_struct *p;
+	int result = 1;
+	//struct ns_common *ns;
+
+	for_each_process(p) {
+		//ns = p->nsproxy->mnt_ns->ns.ops->get(p);
+		if (get_mnt_ns_inum(p->nsproxy->mnt_ns) == ns_id) {
+			*seq = get_mnt_ns_seq(p->nsproxy->mnt_ns);
+			result = 0;
+			break;
+		}
+		//p->nsproxy->mnt_ns->ns.ops->put(ns);
+	}
+
+	return result;
+}
+
+/*
+ * if ns_id already exists, check incarnation. If incarnation is incorrect this is an outdated
+ * alias and it can be updated.
+ * create a new alias if alias is not already set with correct incarnation or update alias if
+ * it is set to an old incarnation.
+ * Assumes namespace id is in use by some process and this alias does not exist in the map table.
+ * Should we block the creation if the same alias already exists on another namespace?
+*/
+int set_mnt_ns_alias_once(unsigned int ns_id, u64 seq, char *alias_name, ssize_t namelen)
+{
+	int result;
+	struct alias_map *map = 0;
+
+	// delete outdated alias mapping to make sure the tree is ready for the update
+	if (check_and_fix_ns_alias(ns_id, seq) == 0) {
+		// the alias mapping is not outdated, updating an existing mapping is not allowed
+		result = -EPERM;
+		goto out;
+	}
+
+	result = allocate_alias_map_entry(&map, seq, alias_name, namelen);
+
+	pr_info("IMA: Adding alias='%s' with seq=%llu to nsid=%u\n", map->alias_name, map->incarnation, ns_id);
+
+	if (!result)
+		result = radix_tree_insert(&ns_alias_mapping, ns_id, map);
+
+	if (result)
+		free_alias_map_entry(map);
+
+out:
+	return result;
+}
+
+static ssize_t parse_namespace_alias_update(const char *data, size_t datalen) {
+	char *alias_name;
+	unsigned int ns_id;
+	u64 seq;
+	ssize_t result;
+
+	result = -EINVAL;
+	// TODO: not required the 'A:' head
+	// TODO: consider adding alias without mnt id. The mnt id is assumed to be the namespace
+	//       of the caller ('current')
+	if (data[0] == 'A') {
+		alias_name = kmalloc(datalen, GFP_KERNEL);
+		if (!alias_name) {
+			result = -ENOMEM;
+			goto out;
+		}
+
+		if (sscanf(data, "A:%u:%s", &ns_id, alias_name) != 2) {
+			pr_err("IMA: invalid namespace alias add request\n");
+			goto out_free;
+		}
+
+		if (check_ns_exists(ns_id, &seq)) {
+			result = -EPERM;
+			pr_err("IMA: alias set failed for unused namespace id %u\n", ns_id);
+			goto out_free;
+		}
+
+		if (is_ns_alias_already_set(ns_id, seq)) {
+			result = -EPERM;
+			pr_err("IMA: alias for namespace id %u already set\n", ns_id);
+			goto out_free;
+		}
+
+		// TODO: check if the alias_name is already in use by other namespace id?
+
+		if (set_mnt_ns_alias_once(ns_id, seq, alias_name, strlen(alias_name) + 1) == 0) {
+			result = strlen(data);
+			pr_info("IMA: alias '%s' created for namespace id %u\n", alias_name, ns_id);
+		}
+
+		if (result < 0)
+			pr_err("IMA: alias set for namespace id %u failed: %lu\n", ns_id, result);
+
+		// TODO: clean up the entire alias map table in order to avoid too many not used alias
+		//       (for released namespaces)? IMA will delete the old alias only for new
+		//       measures in the related mount namespace
+	} else {
+		pr_err("IMA: invalid namespace alias add request\n");
+		goto out;
+	}
+
+out_free:
+    kfree(alias_name);
+
+out:
+	return result;
+}
+
+static ssize_t ima_write_namespace(struct file *file, const char __user *buf,
+				size_t datalen, loff_t *ppos)
+{
+	char *data;
+	ssize_t result;
+
+	if (datalen >= PAGE_SIZE)
+		datalen = PAGE_SIZE - 1;
+
+	/* No partial writes. */
+	result = -EINVAL;
+	if (*ppos != 0)
+		goto out;
+
+	result = -ENOMEM;
+	data = kmalloc(datalen + 1, GFP_KERNEL);
+	if (!data)
+		goto out;
+
+	*(data + datalen) = '\0';
+
+	result = -EFAULT;
+	if (copy_from_user(data, buf, datalen))
+		goto out_free;
+
+	pr_info("IMA: namespace alias update: '%s'\n", data);
+
+	result = mutex_lock_interruptible(&ima_write_mutex);
+	if (result < 0)
+		goto out_free;
+
+	result = parse_namespace_alias_update(data, datalen);
+
+	mutex_unlock(&ima_write_mutex);
+
+out_free:
+	kfree(data);
+out:
+
+	return result;
+}
+
 static struct dentry *ima_dir;
 static struct dentry *binary_runtime_measurements;
 static struct dentry *ascii_runtime_measurements;
 static struct dentry *runtime_measurements_count;
 static struct dentry *violations;
 static struct dentry *ima_policy;
+static struct dentry *ima_namespace;
 
 enum ima_fs_flags {
 	IMA_FS_BUSY,
@@ -437,6 +695,49 @@ static const struct file_operations ima_measure_policy_ops = {
 	.llseek = generic_file_llseek,
 };
 
+/*
+ * ima_open_namespace: TODO: should not allow open for reading
+ */
+static int ima_open_namespace(struct inode *inode, struct file *filp)
+{
+	if (!(filp->f_flags & O_WRONLY))
+		return -EACCES;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	pr_info("IMA: open namespace alias file\n");
+
+	if (test_and_set_bit(IMA_FS_BUSY, &ima_fs_flags))
+		return -EBUSY;
+	return 0;
+}
+
+/*
+ * ima_release_namespace - TODO.
+ *
+ * TODO.
+ */
+static int ima_release_namespace(struct inode *inode, struct file *file)
+{
+	if ((file->f_flags & O_ACCMODE) == O_RDONLY)
+    	return 0;
+
+	pr_info("IMA: release namespace alias file\n");
+
+	clear_bit(IMA_FS_BUSY, &ima_fs_flags);
+
+	return 0;
+}
+
+static const struct file_operations ima_measure_namespace_ops = {
+	.open = ima_open_namespace,
+	.write = ima_write_namespace,
+	.read = seq_read,
+	.release = ima_release_namespace,
+	.llseek = generic_file_llseek,
+};
+
 int __init ima_fs_init(void)
 {
 	ima_dir = securityfs_create_dir("ima", NULL);
@@ -476,6 +777,12 @@ int __init ima_fs_init(void)
 	if (IS_ERR(ima_policy))
 		goto out;
 
+	ima_namespace = securityfs_create_file("namespace_alias", NAMESPACE_FILE_FLAGS,
+						ima_dir, NULL,
+						&ima_measure_namespace_ops);
+	if (IS_ERR(ima_namespace))
+		goto out;
+
 	return 0;
 out:
 	securityfs_remove(violations);
@@ -484,5 +791,6 @@ out:
 	securityfs_remove(binary_runtime_measurements);
 	securityfs_remove(ima_dir);
 	securityfs_remove(ima_policy);
+	securityfs_remove(ima_namespace);
 	return -1;
 }

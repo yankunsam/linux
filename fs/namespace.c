@@ -93,6 +93,16 @@ static inline struct hlist_head *mp_hash(struct dentry *dentry)
 	return &mountpoint_hashtable[tmp & mp_hash_mask];
 }
 
+unsigned int get_mnt_ns_inum(struct mnt_namespace *mnt_ns)
+{
+	return mnt_ns->ns.inum;
+}
+
+u64 get_mnt_ns_seq(struct mnt_namespace *mnt_ns)
+{
+	return mnt_ns->seq;
+}
+
 /*
  * allocation is serialized by namespace_sem, but we need the spinlock to
  * serialize with freeing.
