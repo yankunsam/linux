@@ -423,6 +423,7 @@ static ssize_t ima_write_policy(struct file *file, const char __user *buf,
 		integrity_audit_msg(AUDIT_INTEGRITY_STATUS, NULL, NULL,
 				    "policy_update", "signed policy required",
 				    1, 0);
+
 		if (ima_appraise & IMA_APPRAISE_ENFORCE)
 			result = -EACCES;
 	} else {
@@ -577,6 +578,31 @@ static int create_mnt_ns_directory(unsigned int ns_id)
 
 out:
 	return result;
+}
+
+/*
+ * ima_mnt_namespace_dying - releases all namespace policy resources
+ * It is called automatically when the namespace is released.
+ * @ns_id namespace id to be released
+ *
+ * Note: This function is called by put_mnt_ns() in the context
+ * of a namespace release. We need to make sure that a lock on
+ * this path is allowed.
+ */
+void ima_mnt_namespace_dying(unsigned int ns_id)
+{
+	struct ima_ns_policy *p;
+
+	spin_lock(&ima_ns_policy_lock);
+	p = radix_tree_delete(&ima_ns_policy_mapping, ns_id);
+
+	if (!p) {
+		spin_unlock(&ima_ns_policy_lock);
+		return;
+	}
+
+	free_namespace_policy(p);
+	spin_unlock(&ima_ns_policy_lock);
 }
 
 static ssize_t handle_new_namespace_policy(const char *data, size_t datalen)

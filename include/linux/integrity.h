@@ -43,4 +43,13 @@ static inline void integrity_load_keys(void)
 }
 #endif /* CONFIG_INTEGRITY */
 
+#ifdef CONFIG_IMA_PER_NAMESPACE
+extern void ima_mnt_namespace_dying(unsigned int ns_id);
+#else
+static inline void ima_mnt_namespace_dying(unsigned int ns_id)
+{
+	return;
+}
+#endif /* CONFIG_IMA_PER_NAMESPACE */
+
 #endif /* _LINUX_INTEGRITY_H */
