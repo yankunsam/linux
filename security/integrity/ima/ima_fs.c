@@ -365,6 +365,16 @@ static int check_mntns(unsigned int ns_id)
 	return result;
 }
 
+static unsigned int initial_mntns_id;
+static void get_initial_mntns_id(void)
+{
+	struct ns_common *ns;
+
+	ns = mntns_operations.get(&init_task);
+	initial_mntns_id = ns->inum;
+	mntns_operations.put(ns);
+}
+
 /*
  * ima_find_namespace_id_from_inode
  * @policy_inode: the inode of the securityfs policy file for a given
@@ -699,6 +709,12 @@ static ssize_t handle_new_namespace_policy(const char *data, size_t datalen)
 		goto out;
 	}
 
+	if (ns_id == initial_mntns_id) {
+		pr_err("IMA: invalid use of the initial mount namespace\n");
+		result = -EINVAL;
+		goto out;
+	}
+
 	ima_namespace_lock();
 	if (check_mntns(ns_id)) {
 		result = -ENOENT;
@@ -835,6 +851,8 @@ int __init ima_fs_init(void)
 						&ima_namespaces_ops);
 	if (IS_ERR(ima_namespaces))
 		goto out;
+
+	get_initial_mntns_id();
 #endif
 
 	return 0;
