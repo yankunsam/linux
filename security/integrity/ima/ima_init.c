@@ -135,6 +135,8 @@ int __init ima_init(void)
 	if (rc != 0)
 		return rc;
 
+	ima_namespace_lock_init();
+
 	ima_init_policy();
 
 	return ima_fs_init();

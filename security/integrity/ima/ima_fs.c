@@ -275,6 +275,48 @@ static const struct file_operations ima_ascii_measurements_ops = {
 };
 
 #ifdef CONFIG_IMA_PER_NAMESPACE
+/* used for namespace policy rules initialization */
+static LIST_HEAD(empty_policy);
+
+static int allocate_namespace_policy(struct ima_ns_policy **ins,
+		struct dentry *policy_dentry, struct dentry *ns_dentry)
+{
+	int result;
+	struct ima_ns_policy *p;
+
+	p = kmalloc(sizeof(struct ima_ns_policy), GFP_KERNEL);
+	if (!p) {
+		result = -ENOMEM;
+		goto out;
+	}
+
+	p->policy_dentry = policy_dentry;
+	p->ns_dentry = ns_dentry;
+	p->ima_appraise = 0;
+	p->ima_policy_flag = 0;
+	INIT_LIST_HEAD(&p->ima_policy_rules);
+	/* namespace starts with empty rules and not pointing to
+	 * ima_policy_rules */
+	p->ima_rules = &empty_policy;
+
+	result = 0;
+	*ins = p;
+
+out:
+	return result;
+}
+
+static void free_namespace_policy(struct ima_ns_policy *ins)
+{
+	if (ins->policy_dentry)
+		securityfs_remove(ins->policy_dentry);
+	securityfs_remove(ins->ns_dentry);
+
+	ima_free_policy_rules(&ins->ima_policy_rules);
+
+	kfree(ins);
+}
+
 /*
  * check_mntns: check a mount namespace is valid
  *
@@ -476,9 +518,11 @@ static int ima_release_policy(struct inode *inode, struct file *file)
 #ifndef	CONFIG_IMA_WRITE_POLICY
 	securityfs_remove(ima_policy);
 	ima_policy = NULL;
-#else
-	clear_bit(IMA_FS_BUSY, &ima_fs_flags);
 #endif
+
+	/* always clear the busy flag so other namespaces can use it */
+	clear_bit(IMA_FS_BUSY, &ima_fs_flags);
+
 	return 0;
 }
 
@@ -500,11 +544,14 @@ static int create_mnt_ns_directory(unsigned int ns_id)
 	int result;
 	struct dentry *ns_dir, *ns_policy;
 	char dir_name[64];
+	struct ima_ns_policy *ins;
 
 	snprintf(dir_name, sizeof(dir_name), "%u", ns_id);
 
 	ns_dir = securityfs_create_dir(dir_name, ima_dir);
 	if (IS_ERR(ns_dir)) {
+		/* TODO: handle EEXIST error, remove the folder and
+		continue the procedure */
 		result = PTR_ERR(ns_dir);
 		goto out;
 	}
@@ -518,7 +565,15 @@ static int create_mnt_ns_directory(unsigned int ns_id)
 		goto out;
 	}
 
-	result = 0;
+	result = allocate_namespace_policy(&ins, ns_policy, ns_dir);
+	if (!result) {
+		result = radix_tree_insert(&ima_ns_policy_mapping, ns_id, ins);
+		if (result)
+			free_namespace_policy(ins);
+	} else {
+		securityfs_remove(ns_policy);
+		securityfs_remove(ns_dir);
+	}
 
 out:
 	return result;
@@ -528,6 +583,7 @@ static ssize_t handle_new_namespace_policy(const char *data, size_t datalen)
 {
 	unsigned int ns_id;
 	ssize_t result;
+	struct ima_ns_policy *ins;
 
 	result = -EINVAL;
 
@@ -536,20 +592,33 @@ static ssize_t handle_new_namespace_policy(const char *data, size_t datalen)
 		goto out;
 	}
 
+	rcu_read_lock();
+	ins = radix_tree_lookup(&ima_ns_policy_mapping, ns_id);
+	rcu_read_unlock();
+	if (ins) {
+		pr_info("IMA: directory for namespace id %u already created\n", ns_id);
+		result = datalen;
+		goto out;
+	}
+
+	ima_namespace_lock();
 	if (check_mntns(ns_id)) {
 		result = -ENOENT;
 		pr_err("IMA: unused namespace id %u\n", ns_id);
-		goto out;
+		goto out_unlock;
 	}
 
 	result = create_mnt_ns_directory(ns_id);
 	if (result != 0) {
 		pr_err("IMA: namespace id %u directory creation failed\n", ns_id);
-		goto out;
+		goto out_unlock;
 	}
 
 	result = datalen;
 	pr_info("IMA: directory created for namespace id %u\n", ns_id);
+
+out_unlock:
+	ima_namespace_unlock();
 
 out:
 	return result;

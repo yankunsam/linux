@@ -47,6 +47,12 @@
 int ima_policy_flag;
 static int temp_ima_appraise;
 
+#ifdef CONFIG_IMA_PER_NAMESPACE
+/* policy namespace map entries except the initial namespace policy */
+RADIX_TREE(ima_ns_policy_mapping, GFP_ATOMIC);
+spinlock_t ima_ns_policy_lock;
+#endif
+
 #define MAX_LSM_RULES 6
 enum lsm_rule_types { LSM_OBJ_USER, LSM_OBJ_ROLE, LSM_OBJ_TYPE,
 	LSM_SUBJ_USER, LSM_SUBJ_ROLE, LSM_SUBJ_TYPE
@@ -863,6 +869,20 @@ ssize_t ima_parse_add_rule(char *rule)
 	return len;
 }
 
+void ima_free_policy_rules(struct list_head *policy_rules)
+{
+	struct ima_rule_entry *entry, *tmp;
+	int i;
+
+	list_for_each_entry_safe(entry, tmp, policy_rules, list) {
+		for (i = 0; i < MAX_LSM_RULES; i++)
+			kfree(entry->lsm[i].args_p);
+
+		list_del(&entry->list);
+		kfree(entry);
+	}
+}
+
 /**
  * ima_delete_rules() called to cleanup invalid in-flight policy.
  * We don't need locking as we operate on the temp list, which is
@@ -871,17 +891,8 @@ ssize_t ima_parse_add_rule(char *rule)
  */
 void ima_delete_rules(void)
 {
-	struct ima_rule_entry *entry, *tmp;
-	int i;
-
 	temp_ima_appraise = 0;
-	list_for_each_entry_safe(entry, tmp, &ima_temp_rules, list) {
-		for (i = 0; i < MAX_LSM_RULES; i++)
-			kfree(entry->lsm[i].args_p);
-
-		list_del(&entry->list);
-		kfree(entry);
-	}
+	ima_free_policy_rules(&ima_temp_rules);
 }
 
 #ifdef	CONFIG_IMA_READ_POLICY
