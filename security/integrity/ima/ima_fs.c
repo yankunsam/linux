@@ -575,6 +575,7 @@ static int ima_open_policy(struct inode *inode, struct file *filp)
 static int ima_release_policy(struct inode *inode, struct file *file)
 {
 	const char *cause = valid_policy ? "completed" : "failed";
+	struct ima_ns_policy *ins;
 
 	if ((file->f_flags & O_ACCMODE) == O_RDONLY)
 		return seq_release(inode, file);
@@ -595,14 +596,36 @@ static int ima_release_policy(struct inode *inode, struct file *file)
 		return 0;
 	}
 
+	/* get the namespace id from file->inode (policy file inode).
+	 * We also need to synchronize this operation with concurrent namespace
+	 * releasing. */
+	ima_namespace_lock();
+	ins = ima_get_namespace_policy_from_inode(inode);
+	if (!ins) {
+		/* the namespace is not valid anymore, discard new policy
+		 * rules and exit */
+		ima_delete_rules();
+		valid_policy = 1;
+		clear_bit(IMA_FS_BUSY, &ima_fs_flags);
+		ima_namespace_unlock();
+		return 0;
+	}
+
 	ima_update_policy();
 #ifndef	CONFIG_IMA_WRITE_POLICY
-	securityfs_remove(ima_policy_initial_ns);
-	ima_policy = NULL;
+	if (ins == &ima_initial_namespace_policy) {
+		securityfs_remove(ima_policy_initial_ns);
+		ima_policy_initial_ns = NULL;
+	} else {
+		securityfs_remove(ins->policy_dentry);
+		ins->policy_dentry = NULL;
+	}
 #endif
 
 	/* always clear the busy flag so other namespaces can use it */
 	clear_bit(IMA_FS_BUSY, &ima_fs_flags);
+
+	ima_namespace_unlock();
 
 	return 0;
 }
