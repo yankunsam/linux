@@ -18,6 +18,7 @@
 #include <linux/fs.h>
 #include <linux/xattr.h>
 #include <linux/evm.h>
+#include <linux/proc_ns.h>
 
 #include "ima.h"
 
@@ -293,6 +294,7 @@ void ima_audit_measurement(struct integrity_iint_cache *iint,
 	char hash[(iint->ima_hash->length * 2) + 1];
 	const char *algo_name = hash_algo_name[iint->ima_hash->algo];
 	char algo_hash[sizeof(hash) + strlen(algo_name) + 2];
+	struct ns_common *ns;
 	int i;
 
 	if (iint->flags & IMA_AUDITED)
@@ -312,6 +314,12 @@ void ima_audit_measurement(struct integrity_iint_cache *iint,
 	audit_log_format(ab, " hash=");
 	snprintf(algo_hash, sizeof(algo_hash), "%s:%s", algo_name, hash);
 	audit_log_untrustedstring(ab, algo_hash);
+	ns = mntns_operations.get(current);
+	audit_log_format(ab, " mnt_ns=%u", ns->inum);
+	mntns_operations.put(ns);
+	audit_log_format(ab, " dev=");
+	audit_log_untrustedstring(ab, iint->inode->i_sb->s_id);
+	audit_log_format(ab, " ino=%lu", iint->inode->i_ino);
 
 	audit_log_task_info(ab, current);
 	audit_log_end(ab);
