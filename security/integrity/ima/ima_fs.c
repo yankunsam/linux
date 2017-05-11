@@ -274,6 +274,22 @@ static const struct file_operations ima_ascii_measurements_ops = {
 	.release = seq_release,
 };
 
+static struct dentry *ima_dir;
+static struct dentry *binary_runtime_measurements;
+static struct dentry *ascii_runtime_measurements;
+static struct dentry *runtime_measurements_count;
+static struct dentry *violations;
+static struct dentry *ima_policy_initial_ns;
+#ifdef CONFIG_IMA_PER_NAMESPACE
+static struct dentry *ima_namespaces;
+#endif
+
+enum ima_fs_flags {
+	IMA_FS_BUSY,
+};
+
+static unsigned long ima_fs_flags;
+
 #ifdef CONFIG_IMA_PER_NAMESPACE
 /* used for namespace policy rules initialization */
 static LIST_HEAD(empty_policy);
@@ -347,6 +363,76 @@ static int check_mntns(unsigned int ns_id)
 	rcu_read_unlock();
 
 	return result;
+}
+
+/*
+ * ima_find_namespace_id_from_inode
+ * @policy_inode: the inode of the securityfs policy file for a given
+ * namespace
+ *
+ * Return 0 if the namespace id is not found in ima_ns_policy_mapping
+ */
+static unsigned int find_namespace_id_from_inode(struct inode *policy_inode)
+{
+	unsigned int ns_id = 0;
+#ifdef CONFIG_IMA_PER_NAMESPACE
+	struct ima_ns_policy *ins;
+	void **slot;
+	struct radix_tree_iter iter;
+
+	rcu_read_lock();
+	radix_tree_for_each_slot(slot, &ima_ns_policy_mapping, &iter, 0) {
+		ins = radix_tree_deref_slot(slot);
+		if (unlikely(!ins))
+			continue;
+		if (radix_tree_deref_retry(ins)) {
+			slot = radix_tree_iter_retry(&iter);
+			continue;
+		}
+
+		if (ins->policy_dentry && ins->policy_dentry->d_inode == policy_inode) {
+			ns_id = iter.index;
+			break;
+		}
+	}
+	rcu_read_unlock();
+#endif
+
+	return ns_id;
+}
+
+/*
+ * get_namespace_policy_from_inode - Finds namespace mapping from
+ * securityfs policy file
+ * It is called to get the namespace policy reference when a seurityfs
+ * file such as the namespace or policy files are read or written.
+ * @inode: inode of the securityfs policy file under a namespace
+ * folder
+ * Expects the ima_ns_policy_lock already held
+ *
+ * Returns NULL if the namespace policy reference is not reliable once it
+ * probably was already released after a concurrent namespace release.
+ * Otherwise, the namespace policy reference is returned.
+ */
+struct ima_ns_policy *ima_get_namespace_policy_from_inode(struct inode *inode)
+{
+	unsigned int ns_id;
+	struct ima_ns_policy *ins;
+
+	ns_id = find_namespace_id_from_inode(inode);
+#ifdef CONFIG_IMA_PER_NAMESPACE
+	if (ns_id == 0 &&
+		(!ima_policy_initial_ns || inode != ima_policy_initial_ns->d_inode)) {
+		/* ns_id == 0 refers to initial namespace, but inode refers to a
+		 * namespaced policy file. It might be a race condition with
+		 * namespace release, return invalid reference. */
+		return NULL;
+	}
+#endif
+
+	ins = ima_get_policy_from_namespace(ns_id);
+
+	return ins;
 }
 #endif
 
@@ -439,22 +525,6 @@ out:
 	return result;
 }
 
-static struct dentry *ima_dir;
-static struct dentry *binary_runtime_measurements;
-static struct dentry *ascii_runtime_measurements;
-static struct dentry *runtime_measurements_count;
-static struct dentry *violations;
-static struct dentry *ima_policy;
-#ifdef CONFIG_IMA_PER_NAMESPACE
-static struct dentry *ima_namespaces;
-#endif
-
-enum ima_fs_flags {
-	IMA_FS_BUSY,
-};
-
-static unsigned long ima_fs_flags;
-
 #ifdef	CONFIG_IMA_READ_POLICY
 static const struct seq_operations ima_policy_seqops = {
 		.start = ima_policy_start,
@@ -517,7 +587,7 @@ static int ima_release_policy(struct inode *inode, struct file *file)
 
 	ima_update_policy();
 #ifndef	CONFIG_IMA_WRITE_POLICY
-	securityfs_remove(ima_policy);
+	securityfs_remove(ima_policy_initial_ns);
 	ima_policy = NULL;
 #endif
 
@@ -539,6 +609,8 @@ static const struct file_operations ima_measure_policy_ops = {
 /*
  * Assumes namespace id is in use by some process and this mapping
  * does not exist in the map table.
+ * @ns_id namespace id
+ * Expects ima_ns_policy_lock already held
  */
 static int create_mnt_ns_directory(unsigned int ns_id)
 {
@@ -751,10 +823,10 @@ int __init ima_fs_init(void)
 	if (IS_ERR(violations))
 		goto out;
 
-	ima_policy = securityfs_create_file("policy", POLICY_FILE_FLAGS,
+	ima_policy_initial_ns = securityfs_create_file("policy", POLICY_FILE_FLAGS,
 					    ima_dir, NULL,
 					    &ima_measure_policy_ops);
-	if (IS_ERR(ima_policy))
+	if (IS_ERR(ima_policy_initial_ns))
 		goto out;
 
 #ifdef CONFIG_IMA_PER_NAMESPACE
@@ -772,7 +844,7 @@ out:
 	securityfs_remove(ascii_runtime_measurements);
 	securityfs_remove(binary_runtime_measurements);
 	securityfs_remove(ima_dir);
-	securityfs_remove(ima_policy);
+	securityfs_remove(ima_policy_initial_ns);
 #ifdef CONFIG_IMA_PER_NAMESPACE
 	securityfs_remove(ima_namespaces);
 #endif

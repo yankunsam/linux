@@ -20,6 +20,8 @@
 #include <linux/rculist.h>
 #include <linux/genhd.h>
 #include <linux/seq_file.h>
+#include <linux/radix-tree.h>
+#include <linux/proc_ns.h>
 
 #include "ima.h"
 
@@ -52,6 +54,17 @@ static int temp_ima_appraise;
 RADIX_TREE(ima_ns_policy_mapping, GFP_ATOMIC);
 spinlock_t ima_ns_policy_lock;
 #endif
+
+/* initial namespace map entry, not added to the ima_ns_policy_mapping
+ * Used as policy fallback for namespaces without policy settings */
+struct ima_ns_policy ima_initial_namespace_policy = {
+			   .policy_dentry = NULL,
+			   .ns_dentry = NULL,
+			   .ima_rules = NULL,
+			   .ima_policy_rules = LIST_HEAD_INIT(ima_initial_namespace_policy.ima_policy_rules),
+			   .ima_policy_flag = 0,
+			   .ima_appraise = 0
+	   };
 
 #define MAX_LSM_RULES 6
 enum lsm_rule_types { LSM_OBJ_USER, LSM_OBJ_ROLE, LSM_OBJ_TYPE,
@@ -189,6 +202,65 @@ static int __init default_appraise_policy_setup(char *str)
 	return 1;
 }
 __setup("ima_appraise_tcb", default_appraise_policy_setup);
+
+/*
+ * ima_get_policy_from_namespace - Finds the ns_id mapping to namespace
+ * policy structure
+ * @ns_id: mount namespace id to look for in the policy mapping tree
+ *
+ * Returns either the given namespace policy data if mapped or the initial
+ * namespace data instead.
+ *
+ * Note that if a namespace has not a specific policy defined, it will
+ * fall back to the initial namespace policy.
+ */
+struct ima_ns_policy *ima_get_policy_from_namespace(unsigned int ns_id)
+{
+	struct ima_ns_policy *ins;
+
+#ifdef CONFIG_IMA_PER_NAMESPACE
+	rcu_read_lock();
+	ins = radix_tree_lookup(&ima_ns_policy_mapping, ns_id);
+	rcu_read_unlock();
+
+	if (!ins) {
+		ins = &ima_initial_namespace_policy;
+	}
+#else
+	ins = &ima_initial_namespace_policy;
+#endif
+
+	return ins;
+}
+
+/*
+ * ima_get_current_namespace_policy - Finds the namespace policy mapping
+ * for the current task
+ * This function is called on the context of a syscall and then the namespace
+ * in use will not be released during this context.
+ */
+struct ima_ns_policy *ima_get_current_namespace_policy(void)
+{
+	struct ima_ns_policy *ins = NULL;
+#ifdef CONFIG_IMA_PER_NAMESPACE
+	struct ns_common *ns;
+
+	ns = mntns_operations.get(current);
+	if (ns) {
+		ins = ima_get_policy_from_namespace(ns->inum);
+		mntns_operations.put(ns);
+	}
+	if (!ins || (ins->ima_rules != &ins->ima_policy_rules)) {
+		/* if current namespace has no IMA policy, get the
+		 * initial namespace policy */
+		ins = &ima_initial_namespace_policy;
+	}
+#else
+	ins = &ima_initial_namespace_policy;
+#endif
+
+	return ins;
+}
 
 /*
  * The LSM policy can be reloaded, leaving the IMA LSM based rules referring

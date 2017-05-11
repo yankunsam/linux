@@ -150,6 +150,7 @@ struct ima_ns_policy {
 	int ima_appraise;
 };
 
+extern struct ima_ns_policy ima_initial_namespace_policy;
 #ifdef CONFIG_IMA_PER_NAMESPACE
 extern spinlock_t ima_ns_policy_lock;
 extern struct radix_tree_root ima_ns_policy_mapping;
@@ -202,6 +203,11 @@ static inline void ima_namespace_unlock(void) {
 	return;
 }
 #endif
+
+/* IMA namespace function definitions */
+struct ima_ns_policy *ima_get_current_namespace_policy(void);
+struct ima_ns_policy *ima_get_namespace_policy_from_inode(struct inode *inode);
+struct ima_ns_policy *ima_get_policy_from_namespace(unsigned int ns_id);
 
 /*
  * used to protect h_table and sha_table
