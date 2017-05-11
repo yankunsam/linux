@@ -65,7 +65,7 @@ enum tpm_pcrs { TPM_PCR0 = 0, TPM_PCR8 = 8 };
 extern int ima_initialized;
 extern int ima_used_chip;
 extern int ima_hash_algo;
-extern int ima_appraise;
+extern int ima_appraise_mode;
 
 /* IMA event related data */
 struct ima_event_data {
@@ -278,6 +278,10 @@ int ima_policy_show(struct seq_file *m, void *v);
 #define IMA_APPRAISE_MODULES	0x08
 #define IMA_APPRAISE_FIRMWARE	0x10
 #define IMA_APPRAISE_POLICY	0x20
+#ifdef CONFIG_IMA_PER_NAMESPACE
+#define IMA_APPRAISE_NAMESPACE 0x40
+#define IMA_APPRAISE_ENFORCE_NS (IMA_APPRAISE_ENFORCE | IMA_APPRAISE_NAMESPACE)
+#endif
 
 
 #ifdef CONFIG_IMA_APPRAISE

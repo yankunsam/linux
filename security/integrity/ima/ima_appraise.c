@@ -21,12 +21,15 @@
 static int __init default_appraise_setup(char *str)
 {
 	if (strncmp(str, "off", 3) == 0)
-		ima_appraise = 0;
+		ima_appraise_mode = 0;
 	else if (strncmp(str, "log", 3) == 0)
-		ima_appraise = IMA_APPRAISE_LOG;
+		ima_appraise_mode = IMA_APPRAISE_LOG;
 	else if (strncmp(str, "fix", 3) == 0)
-		ima_appraise = IMA_APPRAISE_FIX;
-
+		ima_appraise_mode = IMA_APPRAISE_FIX;
+#ifdef CONFIG_IMA_PER_NAMESPACE
+	else if (strncmp(str, "enforce_ns", 10) == 0)
+		ima_appraise_mode = IMA_APPRAISE_ENFORCE_NS;
+#endif
 	return 1;
 }
 

@@ -517,7 +517,7 @@ void __init ima_init_policy(void)
 	ins = &ima_initial_namespace_policy;
 
 	ins->ima_rules = &ima_default_rules;
-	ins->ima_appraise = ima_appraise;
+	ins->ima_appraise = ima_appraise_mode;
 
 	ima_update_policy_flag(ins);
 	temp_ima_appraise = 0;
@@ -564,7 +564,16 @@ void ima_update_policy(struct ima_ns_policy *ins)
 	if (ins->ima_rules != policy) {
 		ins->ima_policy_flag = 0;
 		ins->ima_rules = policy;
-		ins->ima_appraise = ima_appraise;
+		ins->ima_appraise = ima_appraise_mode;
+#ifdef CONFIG_IMA_PER_NAMESPACE
+		if (ins != &ima_initial_namespace_policy &&
+				ima_appraise_mode == IMA_APPRAISE_ENFORCE_NS) {
+			/* For now, on the enforce_ns mode, switch to enforce mode
+			 * when new policy is set for a namespace and for the first
+			 * time */
+			ins->ima_appraise = IMA_APPRAISE_ENFORCE;
+		}
+#endif
 	}
 
 	ima_update_policy_flag(ins);
