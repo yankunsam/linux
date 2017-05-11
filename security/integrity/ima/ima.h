@@ -47,7 +47,19 @@ enum tpm_pcrs { TPM_PCR0 = 0, TPM_PCR8 = 8 };
 #define IMA_TEMPLATE_NUM_FIELDS_MAX	15
 
 #define IMA_TEMPLATE_IMA_NAME "ima"
+#define IMA_TEMPLATE_IMA_NG_NAME "ima-ng"
+#define IMA_TEMPLATE_IMA_SIG_NAME "ima-sig"
+
+#ifndef CONFIG_IMA_PER_NAMESPACE
 #define IMA_TEMPLATE_IMA_FMT "d|n"
+#define IMA_TEMPLATE_IMA_NG_FMT "d-ng|n-ng"
+#define IMA_TEMPLATE_IMA_SIG_FMT "d-ng|n-ng|sig"
+#else
+#define IMA_TEMPLATE_IMA_FMT "nid|fi|dev|d|n"
+#define IMA_TEMPLATE_IMA_NG_FMT "nid|fi|dev|d-ng|n-ng"
+#define IMA_TEMPLATE_IMA_SIG_FMT "nid|fi|dev|d-ng|n-ng|sig"
+#endif
+
 
 /* current content of the policy */
 extern int ima_policy_flag;

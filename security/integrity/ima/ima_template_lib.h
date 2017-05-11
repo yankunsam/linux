@@ -26,6 +26,12 @@ void ima_show_template_string(struct seq_file *m, enum ima_show_type show,
 			      struct ima_field_data *field_data);
 void ima_show_template_sig(struct seq_file *m, enum ima_show_type show,
 			   struct ima_field_data *field_data);
+void ima_show_namespaceid(struct seq_file *m, enum ima_show_type show,
+		       struct ima_field_data *field_data);
+void ima_show_filei(struct seq_file *m, enum ima_show_type show,
+		       struct ima_field_data *field_data);
+void ima_show_dev(struct seq_file *m, enum ima_show_type show,
+		       struct ima_field_data *field_data);
 int ima_eventdigest_init(struct ima_event_data *event_data,
 			 struct ima_field_data *field_data);
 int ima_eventname_init(struct ima_event_data *event_data,
@@ -36,4 +42,11 @@ int ima_eventname_ng_init(struct ima_event_data *event_data,
 			  struct ima_field_data *field_data);
 int ima_eventsig_init(struct ima_event_data *event_data,
 		      struct ima_field_data *field_data);
+int ima_namespaceid_init(struct ima_event_data *event_data,
+		      struct ima_field_data *field_data);
+int ima_filei_init(struct ima_event_data *event_data,
+		      struct ima_field_data *field_data);
+int ima_dev_init(struct ima_event_data *event_data,
+		      struct ima_field_data *field_data);
+
 #endif /* __LINUX_IMA_TEMPLATE_LIB_H */

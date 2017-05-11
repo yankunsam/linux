@@ -219,3 +219,11 @@ config IMA_APPRAISE_SIGNED_INIT
 	default n
 	help
 	   This option requires user-space init to be signed.
+
+config IMA_PER_NAMESPACE
+	bool "Enable per mount-namespace handling of IMA policy."
+	depends on IMA
+	default n
+	help
+	    This option enables another API in securityfs allowing IMA policies to
+	    be defined per mount namespace.

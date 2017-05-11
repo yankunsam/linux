@@ -21,8 +21,8 @@
 
 static struct ima_template_desc builtin_templates[] = {
 	{.name = IMA_TEMPLATE_IMA_NAME, .fmt = IMA_TEMPLATE_IMA_FMT},
-	{.name = "ima-ng", .fmt = "d-ng|n-ng"},
-	{.name = "ima-sig", .fmt = "d-ng|n-ng|sig"},
+	{.name = IMA_TEMPLATE_IMA_NG_NAME, .fmt = IMA_TEMPLATE_IMA_NG_FMT},
+	{.name = IMA_TEMPLATE_IMA_SIG_NAME, .fmt = IMA_TEMPLATE_IMA_SIG_FMT},
 	{.name = "", .fmt = ""},	/* placeholder for a custom format */
 };
 
@@ -40,6 +40,12 @@ static struct ima_template_field supported_fields[] = {
 	 .field_show = ima_show_template_string},
 	{.field_id = "sig", .field_init = ima_eventsig_init,
 	 .field_show = ima_show_template_sig},
+	{.field_id = "nid", .field_init = ima_namespaceid_init,
+	 .field_show = ima_show_namespaceid},
+	{.field_id = "fi", .field_init = ima_filei_init,
+	 .field_show = ima_show_filei},
+	{.field_id = "dev", .field_init = ima_dev_init,
+	 .field_show = ima_show_dev},
 };
 #define MAX_TEMPLATE_NAME_LEN 15
 
