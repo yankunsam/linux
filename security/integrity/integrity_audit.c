@@ -13,6 +13,7 @@
 #include <linux/fs.h>
 #include <linux/gfp.h>
 #include <linux/audit.h>
+#include <linux/proc_ns.h>
 #include "integrity.h"
 
 static int integrity_audit_info;
@@ -52,8 +53,12 @@ void integrity_audit_msg(int audit_msgno, struct inode *inode,
 	audit_log_format(ab, " comm=");
 	audit_log_untrustedstring(ab, get_task_comm(name, current));
 	if (fname) {
+		struct ns_common *ns;
 		audit_log_format(ab, " name=");
 		audit_log_untrustedstring(ab, fname);
+		ns = mntns_operations.get(current);
+		audit_log_format(ab, " mnt_ns=%u", ns->inum);
+		mntns_operations.put(ns);
 	}
 	if (inode) {
 		audit_log_format(ab, " dev=");
