@@ -26,6 +26,7 @@ static int __init default_appraise_setup(char *str)
 		ima_appraise = IMA_APPRAISE_LOG;
 	else if (strncmp(str, "fix", 3) == 0)
 		ima_appraise = IMA_APPRAISE_FIX;
+
 	return 1;
 }
 
@@ -38,10 +39,12 @@ __setup("ima_appraise=", default_appraise_setup);
  */
 int ima_must_appraise(struct inode *inode, int mask, enum ima_hooks func)
 {
-	if (!ima_appraise)
+	struct ima_ns_policy *ins = ima_get_current_namespace_policy();
+
+	if (!ins->ima_appraise)
 		return 0;
 
-	return ima_match_policy(inode, func, mask, IMA_APPRAISE, NULL);
+	return ima_match_policy(inode, func, mask, IMA_APPRAISE, NULL, ins);
 }
 
 static int ima_fix_xattr(struct dentry *dentry,
@@ -189,7 +192,7 @@ int ima_appraise_measurement(enum ima_hooks func,
 			     struct integrity_iint_cache *iint,
 			     struct file *file, const unsigned char *filename,
 			     struct evm_ima_xattr_data *xattr_value,
-			     int xattr_len, int opened)
+			     int xattr_len, int opened, struct ima_ns_policy *ins)
 {
 	static const char op[] = "appraise_data";
 	char *cause = "unknown";
@@ -273,7 +276,7 @@ int ima_appraise_measurement(enum ima_hooks func,
 
 out:
 	if (status != INTEGRITY_PASS) {
-		if ((ima_appraise & IMA_APPRAISE_FIX) &&
+		if ((ins->ima_appraise & IMA_APPRAISE_FIX) &&
 		    (!xattr_value ||
 		     xattr_value->type != EVM_IMA_XATTR_DIGSIG)) {
 			if (!ima_fix_xattr(dentry, iint))
@@ -326,8 +329,11 @@ void ima_inode_post_setattr(struct dentry *dentry)
 	struct inode *inode = d_backing_inode(dentry);
 	struct integrity_iint_cache *iint;
 	int must_appraise;
+	struct ima_ns_policy *ins;
 
-	if (!(ima_policy_flag & IMA_APPRAISE) || !S_ISREG(inode->i_mode)
+	ins = ima_get_current_namespace_policy();
+
+	if (!(ins->ima_policy_flag & IMA_APPRAISE) || !S_ISREG(inode->i_mode)
 	    || !(inode->i_opflags & IOP_XATTR))
 		return;
 
@@ -363,8 +369,11 @@ static int ima_protect_xattr(struct dentry *dentry, const char *xattr_name,
 static void ima_reset_appraise_flags(struct inode *inode, int digsig)
 {
 	struct integrity_iint_cache *iint;
+	struct ima_ns_policy *ins;
 
-	if (!(ima_policy_flag & IMA_APPRAISE) || !S_ISREG(inode->i_mode))
+	ins = ima_get_current_namespace_policy();
+
+	if (!(ins->ima_policy_flag & IMA_APPRAISE) || !S_ISREG(inode->i_mode))
 		return;
 
 	iint = integrity_iint_find(inode);

@@ -308,7 +308,7 @@ static int allocate_namespace_policy(struct ima_ns_policy **ins,
 
 	p->policy_dentry = policy_dentry;
 	p->ns_dentry = ns_dentry;
-	p->ima_appraise = 0;
+	p->ima_appraise = ima_appraise;
 	p->ima_policy_flag = 0;
 	INIT_LIST_HEAD(&p->ima_policy_rules);
 	/* namespace starts with empty rules and not pointing to
@@ -488,6 +488,7 @@ static ssize_t ima_write_policy(struct file *file, const char __user *buf,
 {
 	char *data;
 	ssize_t result;
+	struct ima_ns_policy *ins;
 
 	if (datalen >= PAGE_SIZE)
 		datalen = PAGE_SIZE - 1;
@@ -512,19 +513,30 @@ static ssize_t ima_write_policy(struct file *file, const char __user *buf,
 	if (result < 0)
 		goto out_free;
 
+	ima_namespace_lock();
+	ins = ima_get_namespace_policy_from_inode(file->f_inode);
+	if (!ins) {
+		/* the namespace is not valid anymore, indicate the error
+		 * and exit */
+		result = -EINVAL;
+		goto out_unlock;
+	}
+
 	if (data[0] == '/') {
 		result = ima_read_policy(data);
-	} else if (ima_appraise & IMA_APPRAISE_POLICY) {
+	} else if (ins->ima_appraise & IMA_APPRAISE_POLICY) {
 		pr_err("IMA: signed policy file (specified as an absolute pathname) required\n");
 		integrity_audit_msg(AUDIT_INTEGRITY_STATUS, NULL, NULL,
 				    "policy_update", "signed policy required",
 				    1, 0);
 
-		if (ima_appraise & IMA_APPRAISE_ENFORCE)
+		if (ins->ima_appraise & IMA_APPRAISE_ENFORCE)
 			result = -EACCES;
 	} else {
 		result = ima_parse_add_rule(data);
 	}
+out_unlock:
+	ima_namespace_unlock();
 	mutex_unlock(&ima_write_mutex);
 out_free:
 	kfree(data);
@@ -611,7 +623,7 @@ static int ima_release_policy(struct inode *inode, struct file *file)
 		return 0;
 	}
 
-	ima_update_policy();
+	ima_update_policy(ins);
 #ifndef	CONFIG_IMA_WRITE_POLICY
 	if (ins == &ima_initial_namespace_policy) {
 		securityfs_remove(ima_policy_initial_ns);
@@ -698,16 +710,16 @@ void ima_mnt_namespace_dying(unsigned int ns_id)
 {
 	struct ima_ns_policy *p;
 
-	spin_lock(&ima_ns_policy_lock);
+	ima_namespace_lock();
 	p = radix_tree_delete(&ima_ns_policy_mapping, ns_id);
 
 	if (!p) {
-		spin_unlock(&ima_ns_policy_lock);
+		ima_namespace_unlock();
 		return;
 	}
 
 	free_namespace_policy(p);
-	spin_unlock(&ima_ns_policy_lock);
+	ima_namespace_unlock();
 }
 
 static ssize_t handle_new_namespace_policy(const char *data, size_t datalen)

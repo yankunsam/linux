@@ -30,6 +30,7 @@
 int ima_initialized;
 
 #ifdef CONFIG_IMA_APPRAISE
+/* Used during IMA initialization only */
 int ima_appraise = IMA_APPRAISE_ENFORCE;
 #else
 int ima_appraise;
@@ -144,9 +145,13 @@ void ima_file_free(struct file *file)
 {
 	struct inode *inode = file_inode(file);
 	struct integrity_iint_cache *iint;
+	struct ima_ns_policy *ins;
 
-	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+	ins = ima_get_current_namespace_policy();
+
+	if (!ins->ima_policy_flag || !S_ISREG(inode->i_mode)) {
 		return;
+	}
 
 	iint = integrity_iint_find(inode);
 	if (!iint)
@@ -170,17 +175,20 @@ static int process_measurement(struct file *file, char *buf, loff_t size,
 	int xattr_len = 0;
 	bool violation_check;
 	enum hash_algo hash_algo;
+	struct ima_ns_policy *ins;
 
-	if (!ima_policy_flag || !S_ISREG(inode->i_mode))
+	ins = ima_get_current_namespace_policy();
+
+	if (!ins->ima_policy_flag || !S_ISREG(inode->i_mode))
 		return 0;
 
 	/* Return an IMA_MEASURE, IMA_APPRAISE, IMA_AUDIT action
 	 * bitmask based on the appraise/audit/measurement policy.
 	 * Included is the appraise submask.
 	 */
-	action = ima_get_action(inode, mask, func, &pcr);
+	action = ima_get_action(inode, mask, func, &pcr, ins);
 	violation_check = ((func == FILE_CHECK || func == MMAP_CHECK) &&
-			   (ima_policy_flag & IMA_MEASURE));
+			   (ins->ima_policy_flag & IMA_MEASURE));
 	if (!action && !violation_check)
 		return 0;
 
@@ -249,7 +257,7 @@ static int process_measurement(struct file *file, char *buf, loff_t size,
 				      xattr_value, xattr_len, pcr);
 	if (action & IMA_APPRAISE_SUBMASK)
 		rc = ima_appraise_measurement(func, iint, file, pathname,
-					      xattr_value, xattr_len, opened);
+					      xattr_value, xattr_len, opened, ins);
 	if (action & IMA_AUDIT)
 		ima_audit_measurement(iint, pathname);
 
@@ -263,7 +271,7 @@ out_free:
 		__putname(pathbuf);
 out:
 	inode_unlock(inode);
-	if ((rc && must_appraise) && (ima_appraise & IMA_APPRAISE_ENFORCE))
+	if ((rc && must_appraise) && (ins->ima_appraise & IMA_APPRAISE_ENFORCE))
 		return -EACCES;
 	return 0;
 }
@@ -361,8 +369,10 @@ int ima_read_file(struct file *file, enum kernel_read_file_id read_id)
 {
 	if (!file && read_id == READING_MODULE) {
 #ifndef CONFIG_MODULE_SIG_FORCE
-		if ((ima_appraise & IMA_APPRAISE_MODULES) &&
-		    (ima_appraise & IMA_APPRAISE_ENFORCE))
+		struct ima_ns_policy *ins;
+		ins = ima_get_current_namespace_policy();
+		if ((ins->ima_appraise & IMA_APPRAISE_MODULES) &&
+		    (ins->ima_appraise & IMA_APPRAISE_ENFORCE))
 			return -EACCES;	/* INTEGRITY_UNKNOWN */
 #endif
 		return 0;	/* We rely on module signature checking */
@@ -395,10 +405,13 @@ int ima_post_read_file(struct file *file, void *buf, loff_t size,
 		       enum kernel_read_file_id read_id)
 {
 	enum ima_hooks func;
+	struct ima_ns_policy *ins;
+
+	ins = ima_get_current_namespace_policy();
 
 	if (!file && read_id == READING_FIRMWARE) {
-		if ((ima_appraise & IMA_APPRAISE_FIRMWARE) &&
-		    (ima_appraise & IMA_APPRAISE_ENFORCE))
+		if ((ins->ima_appraise & IMA_APPRAISE_FIRMWARE) &&
+		    (ins->ima_appraise & IMA_APPRAISE_ENFORCE))
 			return -EACCES;	/* INTEGRITY_UNKNOWN */
 		return 0;
 	}
@@ -407,7 +420,7 @@ int ima_post_read_file(struct file *file, void *buf, loff_t size,
 		return 0;
 
 	if (!file || !buf || size == 0) { /* should never happen */
-		if (ima_appraise & IMA_APPRAISE_ENFORCE)
+		if (ins->ima_appraise & IMA_APPRAISE_ENFORCE)
 			return -EACCES;
 		return 0;
 	}
@@ -425,7 +438,6 @@ static int __init init_ima(void)
 	error = ima_init();
 	if (!error) {
 		ima_initialized = 1;
-		ima_update_policy_flag();
 	}
 	return error;
 }
